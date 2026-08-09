@@ -680,6 +680,18 @@ def train():
                                                    cv2.COLORMAP_TWILIGHT_SHIFTED),
                                  step=global_step)
 
+                    # Save render-vs-GT PNGs for human comparison (independent of tb/wandb).
+                    if args.results_dir:
+                        cmp_dir = os.path.join(args.results_dir, f'testset_{i:06d}')
+                        os.makedirs(cmp_dir, exist_ok=True)
+                        pred8, gt8 = to8b(rgb), to8b(gtrgb)
+                        imageio.imwrite(os.path.join(cmp_dir, f'{j:03d}_pred.png'), pred8)
+                        imageio.imwrite(os.path.join(cmp_dir, f'{j:03d}_gt.png'), gt8)
+                        # side-by-side: GT | pred (white 4px separator)
+                        sep = np.full((gt8.shape[0], 4, 3), 255, dtype=np.uint8)
+                        sbs = np.concatenate([gt8, sep, pred8], axis=1)
+                        imageio.imwrite(os.path.join(cmp_dir, f'{j:03d}_gt_vs_pred.png'), sbs)
+
                 metrics_str = ""
                 # evaluation
                 test_mse = compute_img_metric(rgbs, target_rgb_ldr, 'mse')
@@ -707,6 +719,48 @@ def train():
 
             torch.cuda.empty_cache()
             print('Saved test set')
+
+            # --- Train-view renders (health check) ---------------------------
+            # Render the sharp NeRF at a strided subset of TRAIN poses so we can
+            # confirm the reconstruction itself is healthy (not just test). The
+            # train GT is the BLURRY image, so the saved PSNR is only a coherence
+            # indicator, not a deblur metric; the point is visual sanity + a number
+            # that should be sane (not ~10) if training is fine.
+            if args.results_dir:
+                torch.cuda.empty_cache()
+                tr_poses = llff_dataset.poses
+                tr_gt = llff_dataset.images
+                stride = max(1, len(tr_poses) // 6)
+                sel = list(range(0, len(tr_poses), stride))[:6]
+                sel_poses = tr_poses[sel]
+                dummy_num = ((len(sel_poses) - 1) // args.num_gpu + 1) * args.num_gpu - len(sel_poses)
+                dummy_poses = torch.eye(3, 4).unsqueeze(0).expand(dummy_num, 3, 4).type_as(sel_poses)
+                with torch.no_grad():
+                    nerf.eval(); crf.eval()
+                    tr_rgbs, _ = nerf(H, W, K, args.chunk // 2,
+                                      poses=torch.cat([sel_poses, dummy_poses], dim=0),
+                                      render_kwargs=render_kwargs_test)
+                    tr_rgbs = crf(tr_rgbs, mode="encode_rgb", chunk=8)
+                    tr_rgbs = tr_rgbs[:len(tr_rgbs) - dummy_num] if dummy_num else tr_rgbs
+                cmp_dir = os.path.join(args.results_dir, f'trainset_{i:06d}')
+                os.makedirs(cmp_dir, exist_ok=True)
+                tr_psnrs = []
+                for jj, idx in enumerate(sel):
+                    pred = tr_rgbs[jj].cpu().numpy()
+                    gt = tr_gt[idx].cpu().numpy()
+                    pred8, gt8 = to8b(pred), to8b(gt)
+                    imageio.imwrite(os.path.join(cmp_dir, f'{idx:03d}_pred.png'), pred8)
+                    imageio.imwrite(os.path.join(cmp_dir, f'{idx:03d}_gtblur.png'), gt8)
+                    sep = np.full((gt8.shape[0], 4, 3), 255, dtype=np.uint8)
+                    imageio.imwrite(os.path.join(cmp_dir, f'{idx:03d}_gtblur_vs_pred.png'),
+                                    np.concatenate([gt8, sep, pred8], axis=1))
+                    mse = float(((pred - gt) ** 2).mean())
+                    tr_psnrs.append(-10.0 * np.log10(max(mse, 1e-10)))
+                with open(os.path.join(basedir, expname, 'train_coherence.txt'), 'a') as f:
+                    f.write(f"iter{i}: mean_vs_blurGT_PSNR={np.mean(tr_psnrs):.4f} "
+                            f"(per-view {[round(p,2) for p in tr_psnrs]})\n")
+                print(f"[TRAIN] Iter: {i} mean-vs-blurGT PSNR {np.mean(tr_psnrs):.3f}")
+                torch.cuda.empty_cache()
 
         if (i % args.i_video == 0 and i > 0) or is_last_iter:
             torch.cuda.empty_cache()

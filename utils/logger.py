@@ -1,9 +1,13 @@
 import os
 import torch
-import wandb
 import imageio
 import numpy as np
 from tensorboardX import SummaryWriter
+
+try:
+    import wandb
+except ImportError:
+    wandb = None  # wandb is optional; only required when use_wandb=True
 
 
 class Logger(object):
@@ -14,6 +18,9 @@ class Logger(object):
         self.use_wandb = use_wandb
         self.wandb = None
         if self.use_wandb:
+            if wandb is None:
+                raise ImportError("use_wandb=True but the wandb package is not installed. "
+                                  "Install wandb or pass --no_wandb.")
             if wandb_id is not None:
                 input("WARNING: Restoring wandb session with id {}. "
                       "Press ENTER to continue Ctrl-C to terminate".format(wandb_id))

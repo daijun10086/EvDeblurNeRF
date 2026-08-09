@@ -384,5 +384,8 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video", type=int, default=25000,
                         help='frequency of render_poses video saving')
+    parser.add_argument("--results_dir", type=str, default="",
+                        help='if set, save per-view test render / GT / side-by-side PNGs here '
+                             '(for human comparison), in addition to the native testset_<iter> dir')
 
     return parser
