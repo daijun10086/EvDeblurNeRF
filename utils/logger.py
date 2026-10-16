@@ -49,7 +49,12 @@ class Logger(object):
     def image(self, tag, images, step):
         """Log a list of images."""
         if self.tensorboard is not None:
-            self.tensorboard.add_image(tag, images, step)
+            dataformats = 'CHW'
+            if images.ndim == 2:
+                dataformats = 'HW'
+            elif images.ndim == 3 and images.shape[-1] in (1, 3):
+                dataformats = 'HWC'
+            self.tensorboard.add_image(tag, images, step, dataformats=dataformats)
         if self.wandb is not None:
             self.wandb.log({tag: [wandb.Image(images, caption=tag)]}, step=step)
 
